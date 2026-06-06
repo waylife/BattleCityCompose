@@ -76,20 +76,26 @@ jobs:
         run: yes | sdkmanager --licenses
 
       - name: Decode Android keystore
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "ANDROID_KEYSTORE_BASE64 not set, will use debug signing"
+            exit 0
+          fi
           echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > app.keystore
           ls -la app.keystore
 
       - name: Create keystore.properties
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          if [ ! -f app.keystore ]; then
+            echo "No keystore available, skipping keystore.properties"
+            exit 0
+          fi
           cat > keystore.properties <<EOF
           storeFile=app.keystore
           storePassword=$ANDROID_KEYSTORE_PASSWORD
