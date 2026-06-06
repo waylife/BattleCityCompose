@@ -5,6 +5,11 @@ for UEFI Shell (see `UEFI_battlecity/` for the reference). The game logic
 runs entirely in `commonMain`; rendering uses Compose Multiplatform (Skia)
 and runs on Android, iOS, and Desktop (JVM).
 
+## Credits
+
+Ported from the original C/UEFI implementation:
+[https://github.com/MikeWuPing/UEFI_battlecity](https://github.com/MikeWuPing/UEFI_battlecity)
+
 ## Quick start
 
 ```bash
