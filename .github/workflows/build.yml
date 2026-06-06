@@ -1,0 +1,309 @@
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target platform to build (only takes effect on manual run)"
+        required: true
+        type: choice
+        default: "all"
+        options:
+          - all
+          - android
+          - desktop-linux
+          - desktop-windows
+          - desktop-macos
+          - ios
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.caching=true"
+  JAVA_VERSION: "17"
+
+jobs:
+  determine-target:
+    name: Resolve target
+    runs-on: ubuntu-latest
+    outputs:
+      target: ${{ steps.target.outputs.value }}
+    steps:
+      - id: target
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ github.event.inputs.target }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=all" >> "$GITHUB_OUTPUT"
+          fi
+
+  android:
+    name: Android (APK + AAB)
+    needs: [determine-target]
+    if: |
+      needs.determine-target.outputs.target == 'all' ||
+      needs.determine-target.outputs.target == 'android'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses
+
+      - name: Decode Android keystore
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > app.keystore
+          ls -la app.keystore
+
+      - name: Create keystore.properties
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          cat > keystore.properties <<EOF
+          storeFile=app.keystore
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+          echo "keystore.properties created"
+
+      - name: Build Debug APK
+        run: ./gradlew :composeApp:assembleDebug --no-daemon
+
+      - name: Build Release APK
+        run: ./gradlew :composeApp:assembleRelease --no-daemon
+
+      - name: Build Release AAB
+        run: ./gradlew :composeApp:bundleRelease --no-daemon
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            composeApp/build/outputs/apk/**/*.apk
+            composeApp/build/outputs/bundle/**/*.aab
+
+      - name: Cleanup keystore
+        if: always()
+        run: |
+          rm -f app.keystore keystore.properties
+          echo "Keystore files cleaned up"
+
+  desktop-linux:
+    name: Desktop (Linux)
+    needs: [determine-target]
+    if: |
+      needs.determine-target.outputs.target == 'all' ||
+      needs.determine-target.outputs.target == 'desktop-linux'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Install Linux packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            fakeroot \
+            rpm \
+            binutils
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
+
+      - name: Create Linux distribution
+        run: ./gradlew :composeApp:packageReleaseDistributionForCurrentOS --no-daemon
+
+      - name: Create Linux uber-jar
+        run: ./gradlew :composeApp:packageReleaseUberJarForCurrentOS --no-daemon
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            composeApp/build/compose/binaries/main/release/*.deb
+            composeApp/build/compose/binaries/main/release/*.rpm
+            composeApp/build/compose/binaries/main/release/**/*.zip
+            composeApp/build/compose/binaries/main/release/**/*.tar.gz
+            composeApp/build/libs/*-linux*.jar
+            composeApp/build/libs/*-all*.jar
+            composeApp/build/compose/jars/*.jar
+
+  desktop-windows:
+    name: Desktop (Windows)
+    needs: [determine-target]
+    if: |
+      needs.determine-target.outputs.target == 'all' ||
+      needs.determine-target.outputs.target == 'desktop-windows'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
+
+      - name: Create Windows distribution
+        run: ./gradlew :composeApp:packageReleaseDistributionForCurrentOS --no-daemon
+
+      - name: Create Windows uber-jar
+        run: ./gradlew :composeApp:packageReleaseUberJarForCurrentOS --no-daemon
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            composeApp/build/compose/binaries/main/release/*.msi
+            composeApp/build/compose/binaries/main/release/*.exe
+            composeApp/build/compose/binaries/main/release/**/*.zip
+            composeApp/build/libs/*-windows*.jar
+            composeApp/build/libs/*-all*.jar
+            composeApp/build/compose/jars/*.jar
+
+  desktop-macos:
+    name: Desktop (macOS)
+    needs: [determine-target]
+    if: |
+      needs.determine-target.outputs.target == 'all' ||
+      needs.determine-target.outputs.target == 'desktop-macos'
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
+
+      - name: Create macOS distribution
+        run: ./gradlew :composeApp:packageReleaseDistributionForCurrentOS --no-daemon
+
+      - name: Create macOS uber-jar
+        run: ./gradlew :composeApp:packageReleaseUberJarForCurrentOS --no-daemon
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-macos-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            composeApp/build/compose/binaries/main/release/*.dmg
+            composeApp/build/compose/binaries/main/release/*.pkg
+            composeApp/build/compose/binaries/main/release/**/*.zip
+            composeApp/build/libs/*-macos*.jar
+            composeApp/build/libs/*-mac*.jar
+            composeApp/build/libs/*-all*.jar
+            composeApp/build/compose/jars/*.jar
+
+  ios:
+    name: iOS (Framework)
+    needs: [determine-target]
+    if: |
+      needs.determine-target.outputs.target == 'all' ||
+      needs.determine-target.outputs.target == 'ios'
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: List available Xcode
+        run: xcodebuild -version
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
+
+      - name: Build iOS Arm64 Framework
+        run: ./gradlew :composeApp:linkReleaseFrameworkIosArm64 --no-daemon
+
+      - name: Build iOS Simulator Arm64 Framework
+        run: ./gradlew :composeApp:linkReleaseFrameworkIosSimulatorArm64 --no-daemon
+
+      - name: Build iOS X64 Framework
+        run: ./gradlew :composeApp:linkReleaseFrameworkIosX64 --no-daemon
+
+      - name: Upload iOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            composeApp/build/bin/iosArm64/releaseFramework/*.framework
+            composeApp/build/bin/iosSimulatorArm64/releaseFramework/*.framework
+            composeApp/build/bin/iosX64/releaseFramework/*.framework
