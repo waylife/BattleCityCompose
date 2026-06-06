@@ -32,6 +32,9 @@ kotlin {
         compilerOptions {
             jvmTarget.set(JvmTarget.JVM_17)
         }
+        mainRun {
+            mainClass.set("com.battlecity.MainKt")
+        }
     }
 
     sourceSets {
