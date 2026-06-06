@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -26,7 +28,6 @@ import com.battlecity.engine.GameState
 import com.battlecity.engine.InputState
 import com.battlecity.engine.KeyBits
 import com.battlecity.input.VirtualPad
-import com.battlecity.input.bindKeyboard
 import com.battlecity.render.SpriteAtlas
 import com.battlecity.render.drawGame
 import com.battlecity.render.drawSplash
@@ -44,11 +45,12 @@ import kotlinx.coroutines.isActive
  * `org.jetbrains.compose.resources.imageResource`.
  */
 @Composable
-fun App() {
+fun App(input: MutableState<InputState>? = null) {
+    val resolvedInput = input ?: remember { mutableStateOf(InputState()) }
     val atlas = remember { SpriteAtlas() }
     val state = remember { GameState() }
-    val input = remember { mutableStateOf(InputState()) }
     val engine = remember { GameEngine(levelLoader = { _ -> defaultMap() }) }
+    var frame by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(Unit) {
         engine.reset(state)
@@ -62,24 +64,25 @@ fun App() {
         LaunchedEffect(Unit) {
             while (isActive) {
                 val now = nowMs()
-                engine.update(state, input.value, now)
-                val s = input.value
+                engine.update(state, resolvedInput.value, now)
+                val s = resolvedInput.value
                 if (s.system.raw != 0) {
                     if (KeyBits.ENTER in s.system && state.phase == GamePhase.SPLASH) {
                         engine.reset(state)
                     }
-                    input.value = s.copy(system = KeyBits.NONE)
+                    resolvedInput.value = s.copy(system = KeyBits.NONE)
                 }
+                frame++
                 delay(33L)
             }
         }
 
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Canvas(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .bindKeyboard(input, isP1 = true),
+                modifier = Modifier.fillMaxSize(),
             ) {
+                // Force recomposition on each frame so the canvas redraws
+                val invalidateFrame = frame
                 val sx = size.width / GameConfig.SCREEN_W
                 val sy = size.height / GameConfig.SCREEN_H
                 val sc = minOf(sx, sy)
@@ -96,7 +99,7 @@ fun App() {
             }
 
             if (isCompact) {
-                VirtualPad(input)
+                VirtualPad(resolvedInput)
             }
         }
     }
